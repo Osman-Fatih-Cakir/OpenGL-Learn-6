@@ -1,3 +1,4 @@
+// TODO fix peter panning
 
 #include <GL/glew.h>
 #include <GL/freeglut.h>
@@ -17,8 +18,12 @@ typedef glm::mat4 mat4;
 typedef glm::vec3 vec3;
 typedef glm::vec4 vec4;
 
+bool enable_pcf = true;
+bool enable_light_scene = false;
+bool enable_shadow_acne = false;
+
 // Shader programs
-GLuint debug_depth_program, depth_program;
+GLuint shader_program, debug_depth_program, depth_program;
 
 // Framebuffers
 GLuint depth_map_fbo;
@@ -30,8 +35,8 @@ mat4 light_projection, light_view, light_space_matrix;
 GLuint light_space_matrix_loc;
 
 // Camera attributes
-vec3 eye = vec3(0.f, 4.f, 5.f);
-vec3 up = vec3(0.f, 5.f, -4.f);
+vec3 eye = vec3(-3.f, 3.f, 1.5f);
+vec3 up = vec3(0.f, 1.f, 0.f);
 float _near = 0.01f; float _far = 100.f;
 mat4 projection, view;
 GLuint projection_loc, model_loc, view_loc;
@@ -61,6 +66,7 @@ void changeViewport(int w, int h);
 void keyboard(unsigned char key, int x, int y);
 
 void init_depth_shaders();
+void init_debug_depth_shaders();
 void init_shaders();
 void init_depth_map_framebuffer();
 
@@ -73,7 +79,8 @@ void init_floor();
 
 void draw_light_camera();
 void draw_quad();
-void draw_camera();
+void draw_camera(GLuint _shader_program);
+void draw_light(GLuint _shader_program);
 void draw_cubes(GLuint _shader_program);
 void draw_floor(GLuint _shader_program);
 
@@ -115,7 +122,11 @@ int main(int argc, char* argv[])
 
 void init()
 {
+	std::cout << "'Q' to toggle Precision Closer Filtering\n";
+	std::cout << "'E' to see the scene from light's perspective visualized with depth values\n";
+	std::cout << "'T' to see the scnene with or without shadow acne\n";
 	init_depth_shaders();
+	init_debug_depth_shaders();
 	init_shaders();
 	init_depth_map_framebuffer();
 
@@ -131,12 +142,28 @@ void changeViewport(int w, int h)
 	glViewport(0, 0, w, h);
 }
 
+// Keyboard inputs
 void keyboard(unsigned char key, int x, int y)
 {
+	switch (key)
+	{
+	case 'q':
+		enable_pcf = !enable_pcf;
+		glutPostRedisplay();
+		break;
+	case 'e':
+		enable_light_scene = !enable_light_scene;
+		glutPostRedisplay();
+		break;
+	case 't':
+		enable_shadow_acne = !enable_shadow_acne;
+		glutPostRedisplay();
+		break;
+	}
 
 }
 
-void init_shaders()
+void init_debug_depth_shaders()
 {
 	// Initialize shaders
 	GLuint vertex_shader = initshaders(GL_VERTEX_SHADER, "shaders/debug_depth_vs.glsl");
@@ -152,6 +179,14 @@ void init_depth_shaders()
 	depth_program = initprogram(vertex_shader, fragment_shader);
 }
 
+// The last shader that renders the scene with shadows
+void init_shaders()
+{
+	GLuint vertex_shader = initshaders(GL_VERTEX_SHADER, "shaders/vertex_shader.glsl");
+	GLuint fragment_shader = initshaders(GL_FRAGMENT_SHADER, "shaders/fragment_shader.glsl");
+	shader_program = initprogram(vertex_shader, fragment_shader);
+}
+
 // Initialize depth map framebuffer
 void init_depth_map_framebuffer()
 {
@@ -163,8 +198,10 @@ void init_depth_map_framebuffer()
 	glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+	float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+	glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
 
 	// Attach depth texture as FBO's depth buffer
 	glBindFramebuffer(GL_FRAMEBUFFER, depth_map_fbo);
@@ -180,7 +217,7 @@ void init_light_camera()
 {
 	light_space_matrix_loc = glGetUniformLocation(depth_program, "light_space_matrix");
 
-	light_projection = glm::ortho(-10.f, 10.f, -10.f, 10.f, 0.01f, 100.f);
+	light_projection = glm::ortho(-5.f, 5.f, -5.f, 5.f, 0.1f, 10.f);
 	light_view = glm::lookAt(light_position, vec3(0.f, 0.f, 0.f), vec3(0.f, 1.f, 0.f));
 
 	light_space_matrix = light_projection * light_view;
@@ -189,9 +226,6 @@ void init_light_camera()
 // Initialize the camera variables
 void init_camera()
 {
-	//projection_loc = glGetUniformLocation(debug_depth_program, "projection");
-	//view_loc = glGetUniformLocation(debug_depth_program, "view");
-
 	projection = glm::perspective(glm::radians(90.f), (float)WIDTH / HEIGHT, _near, _far);
 	view = glm::lookAt(eye, vec3(0.f, 0.f, 0.f), up);
 }
@@ -218,9 +252,9 @@ void init_quad()
 // Initialize cube VAOs and models
 void init_cubes()
 {
-	init_cube(vec3(-2.5f, 0.5f, 1.f), vec3(0.f, 0.f, 0.f), vec3(0.9f, 0.9f, 0.9f), vec4(0.5f, 0.f, 1.f, 1.f));
-	init_cube(vec3(3.f, 0.5f, 1.5f), vec3(0.f, 0.f, 0.f), vec3(1.f, 5.f, 1.f), vec4(1.f, 0.5f, 0.f, 1.f));
-	init_cube(vec3(0.f, 0.5f, -1.5f), vec3(0.f, 45.f, 0.f), vec3(1.4f, 1.4f, 1.4f), vec4(1.f, 0.f, 0.5f, 1.f));
+	init_cube(vec3(0.f, 0.5f, 1.f), vec3(0.f, 45.f, 0.f), vec3(1.f, 1.f, 1.f), vec4(0.5f, 0.f, 1.f, 1.f));
+	init_cube(vec3(3.f, 1.f, 1.5f), vec3(45.f, 45.f, 45.f), vec3(1.f, 1.f, 1.f), vec4(1.f, 0.5f, 0.f, 1.f));
+	init_cube(vec3(0.f, 1.5f, -1.5f), vec3(0.f, 45.f, 0.f), vec3(1.f, 1.f, 1.f), vec4(1.f, 0.f, 0.5f, 1.f));
 }
 
 void init_cube(vec3 pos, vec3 rotate, vec3 scale, vec4 color)
@@ -311,10 +345,34 @@ void draw_quad()
 }
 
 // Send camera variables to shader
-void draw_camera()
+void draw_camera(GLuint _shader_program)
 {
-	//glUniformMatrix4fv(projection_loc, 1, GL_FALSE, &projection[0][0]);
-	//glUniformMatrix4fv(view_loc, 1, GL_FALSE, &view[0][0]);
+	projection_loc = glGetUniformLocation(_shader_program, "projection");
+	view_loc = glGetUniformLocation(_shader_program, "view");
+
+	glUniformMatrix4fv(projection_loc, 1, GL_FALSE, &projection[0][0]);
+	glUniformMatrix4fv(view_loc, 1, GL_FALSE, &view[0][0]);
+}
+
+// Send light and shadow variables to shader
+void draw_light(GLuint _shader_program)
+{
+	GLuint light_pos_loc = glGetUniformLocation(_shader_program, "light_pos");
+	GLuint eye_loc = glGetUniformLocation(_shader_program, "eye");
+	GLuint lsm_loc = glGetUniformLocation(_shader_program, "light_space_matrix");
+
+	GLuint enable_pcf_loc = glGetUniformLocation(_shader_program, "enable_pcf");
+	GLuint enable_shadow_acne_loc = glGetUniformLocation(_shader_program, "enable_shadow_acne");
+
+	glUniform3fv(light_pos_loc, 1, &light_position[0]);
+	glUniform3fv(eye_loc, 1, &eye[0]);
+	glUniformMatrix4fv(lsm_loc, 1, GL_FALSE, &light_space_matrix[0][0]);
+
+	glUniform1i(enable_pcf_loc, (int)enable_pcf);
+	glUniform1i(enable_shadow_acne_loc, (int)enable_shadow_acne);
+
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, depth_map); // Shadow map
 }
 
 // Draw cubes
@@ -341,7 +399,7 @@ void draw_cubes(GLuint _shader_program)
 void draw_floor(GLuint _shader_program)
 {
 	// Model matrix
-	mat4 model = glm::scale(mat4(1.f), vec3(6.f, 1.f, 4.f));
+	mat4 model = glm::scale(mat4(1.f), vec3(10.f, 10.f, 10.f));
 	model_loc = glGetUniformLocation(_shader_program, "model");
 	glUniformMatrix4fv(model_loc, 1, GL_FALSE, &model[0][0]);
 
@@ -363,6 +421,7 @@ void render()
 	glBindFramebuffer(GL_FRAMEBUFFER, depth_map_fbo);
 	glClear(GL_DEPTH_BUFFER_BIT);
 	
+
 	glUseProgram(depth_program);
 	draw_light_camera();
 	draw_cubes(depth_program);
@@ -370,14 +429,29 @@ void render()
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-	// Second pass, render the scene as usual
-	glViewport(0, 0, WIDTH, HEIGHT);
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	glClearColor(0.1f, 0.1f, 0.1f, 1.f);
+	if (enable_light_scene)
+	{
+		// Render scene from perspective of the light visualized with depth values (for debug purpose)
+		glViewport(0, 0, WIDTH, HEIGHT);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glClearColor(0.1f, 0.1f, 0.1f, 1.f);
 
-	glUseProgram(debug_depth_program);
-	draw_quad();
+		glUseProgram(debug_depth_program);
+		draw_quad();
+	}
+	else
+	{
+		// Second pass, render scene with using depth_map for shadows
+		glViewport(0, 0, WIDTH, HEIGHT);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glUseProgram(shader_program);
 
+		draw_camera(shader_program);
+		draw_light(shader_program);
+		draw_cubes(shader_program);
+		draw_floor(shader_program);
+	}
+	
 	glutSwapBuffers();
 	GLuint err = glGetError(); if (err) fprintf(stderr, "%s\n", gluErrorString(err));
 }
