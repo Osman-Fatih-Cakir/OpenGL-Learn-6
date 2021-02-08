@@ -1,4 +1,3 @@
-// TODO fix peter panning
 
 #include <GL/glew.h>
 #include <GL/freeglut.h>
@@ -421,6 +420,7 @@ void render()
 	glBindFramebuffer(GL_FRAMEBUFFER, depth_map_fbo);
 	glClear(GL_DEPTH_BUFFER_BIT);
 	
+	//glEnable(GL_CULL_FACE); glCullFace(GL_FRONT);
 
 	glUseProgram(depth_program);
 	draw_light_camera();
@@ -428,6 +428,7 @@ void render()
 	draw_floor(depth_program);
 
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	//glDisable(GL_CULL_FACE);
 
 	if (enable_light_scene)
 	{

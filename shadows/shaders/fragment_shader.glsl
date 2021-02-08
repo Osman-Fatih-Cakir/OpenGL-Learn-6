@@ -87,7 +87,7 @@ void main()
 
     // For prevent shadow acne, we define a small bias value
     float bias = 0.0;
-    if (enable_shadow_acne != 0)
+    if (enable_shadow_acne == 0)
     {
         bias = max(0.01 * (1.0 - dot(normal, light_dir)), 0.005);
     }
