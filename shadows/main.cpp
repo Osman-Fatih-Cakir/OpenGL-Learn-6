@@ -1,4 +1,5 @@
-
+// TODO stop showing light scene
+// TODO add white little cubes where the light sources are
 #include <GL/glew.h>
 #include <GL/freeglut.h>
 #include <glm.hpp>
@@ -11,6 +12,7 @@
 
 const int WIDTH = 1200;
 const int HEIGHT = 800;
+const float aspect = WIDTH / HEIGHT;
 
 typedef glm::mat3 mat3;
 typedef glm::mat4 mat4;
@@ -20,18 +22,26 @@ typedef glm::vec4 vec4;
 bool enable_pcf = true;
 bool enable_light_scene = false;
 bool enable_shadow_acne = false;
+bool enable_point_light = true;
 
 // Shader programs
-GLuint shader_program, debug_depth_program, depth_program;
+GLuint shader_program, debug_depth_program, depth_program, cube_depth_program;
 
 // Framebuffers
 GLuint depth_map_fbo;
 GLuint SHADOW_WIDTH = 1024, SHADOW_HEIGHT = 1024;
+GLuint depth_cube_map_fbo;
 
 // Light attributes
 vec3 light_position = vec3(0.f, 5.f, -5.f);
 mat4 light_projection, light_view, light_space_matrix;
-GLuint light_space_matrix_loc;
+GLuint light_space_matrix_loc, light_position_loc;
+
+// Point light attributes
+vec3 pointlight_position = vec3(0.f, 3.f, 0.f);
+float pointlight_far = 100.f;
+mat4 pointlight_projection, pointlight_space_matrices[6];
+GLuint pointlight_space_matrix_loc;
 
 // Camera attributes
 vec3 eye = vec3(-3.f, 3.f, 1.5f);
@@ -58,18 +68,20 @@ GLuint quadVAO;
 
 // Textures
 GLuint wood_texture, cube_texture;
-GLuint depth_map;
+GLuint depth_map, depth_cube_map;
 
 void init();
 void changeViewport(int w, int h);
 void keyboard(unsigned char key, int x, int y);
 
 void init_depth_shaders();
+void init_point_depth_shaders();
 void init_debug_depth_shaders();
 void init_shaders();
 void init_depth_map_framebuffer();
 
 void init_light_camera();
+void init_pointlight_camera();
 void init_camera();
 void init_quad();
 void init_cubes();
@@ -77,6 +89,7 @@ void init_cube(vec3 pos, vec3 rotate, vec3 scale, vec4 color);
 void init_floor();
 
 void draw_light_camera();
+void draw_pointlight_camera();
 void draw_quad();
 void draw_camera(GLuint _shader_program);
 void draw_light(GLuint _shader_program);
@@ -123,13 +136,16 @@ void init()
 {
 	std::cout << "'Q' to toggle Precision Closer Filtering\n";
 	std::cout << "'E' to see the scene from light's perspective visualized with depth values\n";
-	std::cout << "'T' to see the scnene with or without shadow acne\n";
+	std::cout << "'T' to see the scene with or without shadow acne\n";
+	std::cout << "'R' to toogle between point light shadows and directional light shadows\n";
 	init_depth_shaders();
+	init_point_depth_shaders();
 	init_debug_depth_shaders();
 	init_shaders();
 	init_depth_map_framebuffer();
 
 	init_light_camera();
+	init_pointlight_camera();
 	init_camera();
 	init_quad();
 	init_cubes();
@@ -158,8 +174,11 @@ void keyboard(unsigned char key, int x, int y)
 		enable_shadow_acne = !enable_shadow_acne;
 		glutPostRedisplay();
 		break;
+	case 'r':
+		enable_point_light = !enable_point_light;
+		glutPostRedisplay();
+		break;
 	}
-
 }
 
 void init_debug_depth_shaders()
@@ -178,6 +197,15 @@ void init_depth_shaders()
 	depth_program = initprogram(vertex_shader, fragment_shader);
 }
 
+void init_point_depth_shaders()
+{
+	// Initialize shaders
+	GLuint vertex_shader = initshaders(GL_VERTEX_SHADER, "shaders/point_depth_vs.glsl");
+	GLuint geometry_shader = initshaders(GL_GEOMETRY_SHADER, "shaders/point_depth_gs.glsl");
+	GLuint fragment_shader = initshaders(GL_FRAGMENT_SHADER, "shaders/point_depth_fs.glsl");
+	cube_depth_program = initprogram(vertex_shader, geometry_shader, fragment_shader);
+}
+
 // The last shader that renders the scene with shadows
 void init_shaders()
 {
@@ -189,6 +217,9 @@ void init_shaders()
 // Initialize depth map framebuffer
 void init_depth_map_framebuffer()
 {
+	//
+	//// Directional light shadow
+	//
 	glGenFramebuffers(1, &depth_map_fbo);
 	
 	// Create 2D depth texture
@@ -209,6 +240,33 @@ void init_depth_map_framebuffer()
 	glDrawBuffer(GL_NONE);
 	glReadBuffer(GL_NONE);
 	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+	//
+	//// Point light shadow
+	//
+	glGenFramebuffers(1, &depth_cube_map_fbo);
+	glGenTextures(1, &depth_cube_map);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, depth_cube_map);
+
+	// Create 6 2D depth texture framebuffers for genertate a cubemap
+	for (int i = 0; i < 6; i++)
+	{
+		glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_DEPTH_COMPONENT, SHADOW_WIDTH, SHADOW_HEIGHT, 0, GL_DEPTH_COMPONENT, GL_FLOAT, NULL);
+	}
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+	// Attach depth texture as FBO's depth buffer
+	glBindFramebuffer(GL_FRAMEBUFFER, depth_cube_map_fbo);
+	glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, depth_cube_map, 0);
+	// Set both to "none" because there is no need for color attachment
+	glDrawBuffer(GL_NONE);
+	glReadBuffer(GL_NONE);
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 }
 
 // Initialize the camera from lights perspective
@@ -220,6 +278,25 @@ void init_light_camera()
 	light_view = glm::lookAt(light_position, vec3(0.f, 0.f, 0.f), vec3(0.f, 1.f, 0.f));
 
 	light_space_matrix = light_projection * light_view;
+}
+
+// Initialize the camera from point lights perspective
+void init_pointlight_camera()
+{
+	// Uniform variables
+	light_position_loc = glGetUniformLocation(cube_depth_program, "light_position");
+
+	// Projection matrix of the point light is the same
+	pointlight_space_matrix_loc = glGetUniformLocation(cube_depth_program, "light_space_matrix");
+	pointlight_projection = glm::perspective(glm::radians(90.f), (float)SHADOW_WIDTH/SHADOW_HEIGHT, 0.1f, pointlight_far);
+
+	// View matrices
+	pointlight_space_matrices[0] = pointlight_projection * glm::lookAt(pointlight_position, pointlight_position + vec3(1.f, 0.f, 0.f), vec3(0.f, -1.f, 0.f));
+	pointlight_space_matrices[1] = pointlight_projection * glm::lookAt(pointlight_position, pointlight_position + vec3(-1.f, 0.f, 0.f), vec3(0.f, -1.f, 0.f));
+	pointlight_space_matrices[2] = pointlight_projection * glm::lookAt(pointlight_position, pointlight_position + vec3(0.f, 1.f, 0.f), vec3(0.f, 0.f, 1.f));
+	pointlight_space_matrices[3] = pointlight_projection * glm::lookAt(pointlight_position, pointlight_position + vec3(0.f, -1.f, 0.f), vec3(0.f, 0.f, -1.f));
+	pointlight_space_matrices[4] = pointlight_projection * glm::lookAt(pointlight_position, pointlight_position + vec3(0.f, 0.f, 1.f), vec3(0.f, -1.f, 0.f));
+	pointlight_space_matrices[5] = pointlight_projection * glm::lookAt(pointlight_position, pointlight_position + vec3(0.f, 0.f, -1.f), vec3(0.f, -1.f, 0.f));
 }
 
 // Initialize the camera variables
@@ -327,6 +404,16 @@ void draw_light_camera()
 	glUniformMatrix4fv(light_space_matrix_loc, 1, GL_FALSE, &(light_space_matrix)[0][0]);
 }
 
+// Draw camera from point light perspective
+void draw_pointlight_camera()
+{
+	GLuint far_loc = glGetUniformLocation(cube_depth_program, "far");
+
+	glUniform1f(far_loc, pointlight_far);
+	glUniform3fv(light_position_loc, 1, &pointlight_position[0]);
+	glUniformMatrix4fv(pointlight_space_matrix_loc, 6, GL_FALSE, &(pointlight_space_matrices)[0][0][0]);
+}
+
 // Draw the quad
 void draw_quad()
 {
@@ -357,21 +444,35 @@ void draw_camera(GLuint _shader_program)
 void draw_light(GLuint _shader_program)
 {
 	GLuint light_pos_loc = glGetUniformLocation(_shader_program, "light_pos");
+	GLuint pointlight_pos_loc = glGetUniformLocation(_shader_program, "pointlight_pos");
 	GLuint eye_loc = glGetUniformLocation(_shader_program, "eye");
 	GLuint lsm_loc = glGetUniformLocation(_shader_program, "light_space_matrix");
+	GLuint shadow_map_loc = glGetUniformLocation(_shader_program, "directional_shadow_map");
+	GLuint shadow_cubemap_loc = glGetUniformLocation(_shader_program, "point_shadow_map");
 
+	GLuint pointlight_loc = glGetUniformLocation(_shader_program, "enable_point_light");
 	GLuint enable_pcf_loc = glGetUniformLocation(_shader_program, "enable_pcf");
 	GLuint enable_shadow_acne_loc = glGetUniformLocation(_shader_program, "enable_shadow_acne");
-
+	
+	GLuint far_loc = glGetUniformLocation(_shader_program, "far");
+	 
 	glUniform3fv(light_pos_loc, 1, &light_position[0]);
+	glUniform3fv(pointlight_pos_loc, 1, &pointlight_position[0]);
 	glUniform3fv(eye_loc, 1, &eye[0]);
 	glUniformMatrix4fv(lsm_loc, 1, GL_FALSE, &light_space_matrix[0][0]);
 
+	glUniform1i(pointlight_loc, (int)enable_point_light);
 	glUniform1i(enable_pcf_loc, (int)enable_pcf);
 	glUniform1i(enable_shadow_acne_loc, (int)enable_shadow_acne);
+	glUniform1f(far_loc, pointlight_far);
 
+	// Shadow map
+	glUniform1i(shadow_map_loc, 0);
+	glUniform1i(shadow_cubemap_loc, 1);
 	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, depth_map); // Shadow map
+	glBindTexture(GL_TEXTURE_2D, depth_map);
+	glActiveTexture(GL_TEXTURE1);
+	glBindTexture(GL_TEXTURE_CUBE_MAP, depth_cube_map);
 }
 
 // Draw cubes
@@ -415,33 +516,20 @@ void draw_floor(GLuint _shader_program)
 // Draw the scene
 void render()
 {
-	// First pass, render to depth map (from light's perspective)
-	glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
-	glBindFramebuffer(GL_FRAMEBUFFER, depth_map_fbo);
-	glClear(GL_DEPTH_BUFFER_BIT);
-	
-	//glEnable(GL_CULL_FACE); glCullFace(GL_FRONT);
-
-	glUseProgram(depth_program);
-	draw_light_camera();
-	draw_cubes(depth_program);
-	draw_floor(depth_program);
-
-	glBindFramebuffer(GL_FRAMEBUFFER, 0);
-	//glDisable(GL_CULL_FACE);
-
-	if (enable_light_scene)
+	if (enable_point_light) // Point light shadows
 	{
-		// Render scene from perspective of the light visualized with depth values (for debug purpose)
-		glViewport(0, 0, WIDTH, HEIGHT);
-		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-		glClearColor(0.1f, 0.1f, 0.1f, 1.f);
+		// First pass, render to depth map (from light's perspective)
+		glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
+		glBindFramebuffer(GL_FRAMEBUFFER, depth_cube_map_fbo);
+		glClear(GL_DEPTH_BUFFER_BIT);
 
-		glUseProgram(debug_depth_program);
-		draw_quad();
-	}
-	else
-	{
+		glUseProgram(cube_depth_program);
+		draw_pointlight_camera();
+		draw_cubes(cube_depth_program);
+		draw_floor(cube_depth_program);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
 		// Second pass, render scene with using depth_map for shadows
 		glViewport(0, 0, WIDTH, HEIGHT);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -452,7 +540,44 @@ void render()
 		draw_cubes(shader_program);
 		draw_floor(shader_program);
 	}
-	
+	else // Directional light shadows
+	{
+		// First pass, render to depth map (from light's perspective)
+		glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
+		glBindFramebuffer(GL_FRAMEBUFFER, depth_map_fbo);
+		glClear(GL_DEPTH_BUFFER_BIT);
+
+		glUseProgram(depth_program);
+		draw_light_camera();
+		draw_cubes(depth_program);
+		draw_floor(depth_program);
+
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+		if (enable_light_scene)
+		{
+			// Render scene from perspective of the light visualized with depth values (for debug purpose)
+			glViewport(0, 0, WIDTH, HEIGHT);
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			glClearColor(0.1f, 0.1f, 0.1f, 1.f);
+
+			glUseProgram(debug_depth_program);
+			draw_quad();
+		}
+		else
+		{
+			// Second pass, render scene with using depth_map for shadows
+			glViewport(0, 0, WIDTH, HEIGHT);
+			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+			glUseProgram(shader_program);
+
+			draw_camera(shader_program);
+			draw_light(shader_program);
+			draw_cubes(shader_program);
+			draw_floor(shader_program);
+		}
+	}
+
 	glutSwapBuffers();
 	GLuint err = glGetError(); if (err) fprintf(stderr, "%s\n", gluErrorString(err));
 }

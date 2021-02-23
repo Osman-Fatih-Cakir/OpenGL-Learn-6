@@ -80,3 +80,20 @@ GLuint initprogram(GLuint vertexshader, GLuint fragmentshader)
     }
     return program;
 }
+
+GLuint initprogram(GLuint vertexshader, GLuint geometryshader, GLuint fragmentshader)
+{
+    GLuint program = glCreateProgram();
+    GLint linked;
+    glAttachShader(program, vertexshader);
+    glAttachShader(program, geometryshader);
+    glAttachShader(program, fragmentshader);
+    glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    if (linked) glUseProgram(program);
+    else {
+        programerrors(program);
+        throw 4;
+    }
+    return program;
+}

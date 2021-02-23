@@ -8,18 +8,23 @@ in VS_OUT {
 
 out vec4 out_color;
 
-uniform sampler2D shadow_map;
+uniform sampler2D directional_shadow_map;
+uniform samplerCube point_shadow_map;
 
+uniform vec3 pointlight_pos;
 uniform vec3 light_pos;
 uniform vec3 eye;
 
+uniform float far;
+
+uniform int enable_point_light;
 uniform int enable_pcf;
 uniform int enable_shadow_acne;
 
 uniform vec4 fColor;
 
-// Return shadow value, (1.0: shadow, 0.0: non-shadow)
-float shadow_calculation(vec4 _fPos_light_space, float bias)
+// Returns shadow value for directional light, (1.0: shadow, 0.0: non-shadow) 
+float directional_shadow_calculation(vec4 _fPos_light_space, float bias)
 {
     // Perspective divide
     vec3 proj_coord = _fPos_light_space.xyz / _fPos_light_space.w;
@@ -28,7 +33,7 @@ float shadow_calculation(vec4 _fPos_light_space, float bias)
     proj_coord = proj_coord * 0.5 + 0.5;
 
     // Get closest depth value from light's perspective (using [0,1] range fPos_light as coords)
-    float closest_depth = texture(shadow_map, proj_coord.xy).r; 
+    float closest_depth = texture(directional_shadow_map, proj_coord.xy).r; 
 
     // Get depth of current fragment from light's perspective
     float current_depth = proj_coord.z;
@@ -37,12 +42,12 @@ float shadow_calculation(vec4 _fPos_light_space, float bias)
     float shadow = 0.0;
     if (enable_pcf == 1) // Use PCF (perenrage-closer-filtering) for more good looking shadow edges
     {
-        vec2 texel_size = 1.0 / textureSize(shadow_map, 0);
+        vec2 texel_size = 1.0 / textureSize(directional_shadow_map, 0);
         for (int i = -1; i <= 1; i++)
         {
             for (int j = -1; j <= 1; j++)
             {
-                float pcf_depth = texture(shadow_map, proj_coord.xy + vec2(i, j) * texel_size).r;
+                float pcf_depth = texture(directional_shadow_map, proj_coord.xy + vec2(i, j) * texel_size).r;
                 shadow += current_depth - bias > pcf_depth ? 1.0 : 0.0;
             }
         }
@@ -61,6 +66,21 @@ float shadow_calculation(vec4 _fPos_light_space, float bias)
     return shadow;
 }
 
+// Returns shadow value for point light, (1.0: shadow, 0.0: non-shadow)
+float point_shadow_calculation(vec3 _fPos)
+{
+    vec3 light_to_frag = _fPos - pointlight_pos;
+    // Multiply and the depth value is not [1:0] range anymore
+    float closest_depth = texture(point_shadow_map, light_to_frag).r * far;
+
+    float current_depth = length(light_to_frag);
+
+    float bias = 0.05;
+    float shadow = current_depth - bias > closest_depth ? 1.0 : 0.0;
+
+    return shadow;
+}
+
 void main()
 {
     vec4 color = fColor;
@@ -71,7 +91,11 @@ void main()
     // Ambient
     vec3 ambient = 0.2 * color.xyz; 
     // Diffuse
-    vec3 light_dir = normalize(light_pos - fs_in.fPos);
+    vec3 light_dir;
+    if (enable_point_light == 0)
+        light_dir = normalize(light_pos - fs_in.fPos);
+    else
+        light_dir = normalize(pointlight_pos - fs_in.fPos);
     float diff = max(dot(light_dir, normal), 0.0);
     vec3 diffuse = diff * light_color;
     // Specular
@@ -91,7 +115,12 @@ void main()
     {
         bias = max(0.01 * (1.0 - dot(normal, light_dir)), 0.005);
     }
-    float shadow = shadow_calculation(fs_in.fPos_light_space, bias);
+
+    float shadow = 0.0;
+    if (enable_point_light == 1)
+        shadow = point_shadow_calculation(fs_in.fPos);
+    else
+        shadow = directional_shadow_calculation(fs_in.fPos_light_space, bias);
 
     vec3 lighting = (ambient + (1.0 - shadow) * (diffuse + specular)) * color.xyz;
     out_color = vec4(lighting, 1.0);
