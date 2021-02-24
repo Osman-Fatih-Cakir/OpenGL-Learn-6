@@ -67,7 +67,7 @@ float directional_shadow_calculation(vec4 _fPos_light_space, float bias)
 }
 
 // Returns shadow value for point light, (1.0: shadow, 0.0: non-shadow)
-float point_shadow_calculation(vec3 _fPos)
+float point_shadow_calculation(vec3 _fPos, float bias)
 {
     vec3 light_to_frag = _fPos - pointlight_pos;
     // Multiply and the depth value is not [1:0] range anymore
@@ -75,8 +75,35 @@ float point_shadow_calculation(vec3 _fPos)
 
     float current_depth = length(light_to_frag);
 
-    float bias = 0.05;
-    float shadow = current_depth - bias > closest_depth ? 1.0 : 0.0;
+    float shadow = 0.0;
+    // Calculate shadowed fragments
+    if (enable_pcf == 1) // PCF
+    {
+        vec3 sample_offset_directions[20] = vec3[] // The directions
+        (
+            vec3( 1,  1,  1), vec3( 1, -1,  1), vec3(-1, -1,  1), vec3(-1,  1,  1), 
+            vec3( 1,  1, -1), vec3( 1, -1, -1), vec3(-1, -1, -1), vec3(-1,  1, -1),
+            vec3( 1,  1,  0), vec3( 1, -1,  0), vec3(-1, -1,  0), vec3(-1,  1,  0),
+            vec3( 1,  0,  1), vec3(-1,  0,  1), vec3( 1,  0, -1), vec3(-1,  0, -1),
+            vec3( 0,  1,  1), vec3( 0, -1,  1), vec3( 0, -1, -1), vec3( 0,  1, -1)
+        );
+
+        float radius = 0.008;
+
+        for (int i = 0; i < 20; i++)
+        {
+            float pcf_depth = texture(point_shadow_map, light_to_frag + sample_offset_directions[i]*radius).r;
+            pcf_depth *= far;
+            if (current_depth - bias > pcf_depth)
+                shadow += 1.0;
+        }
+
+        shadow /= 20.f;
+    }
+    else
+    {
+        shadow = current_depth - bias > closest_depth ? 1.0 : 0.0;
+    }
 
     return shadow;
 }
@@ -110,17 +137,19 @@ void main()
     //
 
     // For prevent shadow acne, we define a small bias value
-    float bias = 0.0;
+    float dir_bias = 0.0;
+    float poi_bias = 0.0;
     if (enable_shadow_acne == 0)
     {
-        bias = max(0.01 * (1.0 - dot(normal, light_dir)), 0.005);
+        dir_bias = max(0.01 * (1.0 - dot(normal, light_dir)), 0.005);
+        poi_bias = 0.05;
     }
 
     float shadow = 0.0;
     if (enable_point_light == 1)
-        shadow = point_shadow_calculation(fs_in.fPos);
+        shadow = point_shadow_calculation(fs_in.fPos, poi_bias);
     else
-        shadow = directional_shadow_calculation(fs_in.fPos_light_space, bias);
+        shadow = directional_shadow_calculation(fs_in.fPos_light_space, dir_bias);
 
     vec3 lighting = (ambient + (1.0 - shadow) * (diffuse + specular)) * color.xyz;
     out_color = vec4(lighting, 1.0);

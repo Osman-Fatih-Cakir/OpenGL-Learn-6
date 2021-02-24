@@ -36,8 +36,6 @@
   <ItemGroup>
     <None Include="shaders\depth_vs.glsl" />
     <None Include="shaders\depth_fs.glsl" />
-    <None Include="shaders\debug_depth_fs.glsl" />
-    <None Include="shaders\debug_depth_vs.glsl" />
     <None Include="shaders\vertex_shader.glsl" />
     <None Include="shaders\fragment_shader.glsl" />
     <None Include="shaders\point_depth_vs.glsl" />

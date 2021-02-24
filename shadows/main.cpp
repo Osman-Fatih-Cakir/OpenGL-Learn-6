@@ -1,5 +1,4 @@
-// TODO stop showing light scene
-// TODO add white little cubes where the light sources are
+
 #include <GL/glew.h>
 #include <GL/freeglut.h>
 #include <glm.hpp>
@@ -20,12 +19,11 @@ typedef glm::vec3 vec3;
 typedef glm::vec4 vec4;
 
 bool enable_pcf = true;
-bool enable_light_scene = false;
 bool enable_shadow_acne = false;
-bool enable_point_light = true;
+bool enable_point_light = false;
 
 // Shader programs
-GLuint shader_program, debug_depth_program, depth_program, cube_depth_program;
+GLuint shader_program, depth_program, cube_depth_program;
 
 // Framebuffers
 GLuint depth_map_fbo;
@@ -76,7 +74,6 @@ void keyboard(unsigned char key, int x, int y);
 
 void init_depth_shaders();
 void init_point_depth_shaders();
-void init_debug_depth_shaders();
 void init_shaders();
 void init_depth_map_framebuffer();
 
@@ -90,7 +87,6 @@ void init_floor();
 
 void draw_light_camera();
 void draw_pointlight_camera();
-void draw_quad();
 void draw_camera(GLuint _shader_program);
 void draw_light(GLuint _shader_program);
 void draw_cubes(GLuint _shader_program);
@@ -135,12 +131,10 @@ int main(int argc, char* argv[])
 void init()
 {
 	std::cout << "'Q' to toggle Precision Closer Filtering\n";
-	std::cout << "'E' to see the scene from light's perspective visualized with depth values\n";
 	std::cout << "'T' to see the scene with or without shadow acne\n";
 	std::cout << "'R' to toogle between point light shadows and directional light shadows\n";
 	init_depth_shaders();
 	init_point_depth_shaders();
-	init_debug_depth_shaders();
 	init_shaders();
 	init_depth_map_framebuffer();
 
@@ -166,10 +160,6 @@ void keyboard(unsigned char key, int x, int y)
 		enable_pcf = !enable_pcf;
 		glutPostRedisplay();
 		break;
-	case 'e':
-		enable_light_scene = !enable_light_scene;
-		glutPostRedisplay();
-		break;
 	case 't':
 		enable_shadow_acne = !enable_shadow_acne;
 		glutPostRedisplay();
@@ -179,14 +169,6 @@ void keyboard(unsigned char key, int x, int y)
 		glutPostRedisplay();
 		break;
 	}
-}
-
-void init_debug_depth_shaders()
-{
-	// Initialize shaders
-	GLuint vertex_shader = initshaders(GL_VERTEX_SHADER, "shaders/debug_depth_vs.glsl");
-	GLuint fragment_shader = initshaders(GL_FRAGMENT_SHADER, "shaders/debug_depth_fs.glsl");
-	debug_depth_program = initprogram(vertex_shader, fragment_shader);
 }
 
 void init_depth_shaders()
@@ -414,22 +396,6 @@ void draw_pointlight_camera()
 	glUniformMatrix4fv(pointlight_space_matrix_loc, 6, GL_FALSE, &(pointlight_space_matrices)[0][0][0]);
 }
 
-// Draw the quad
-void draw_quad()
-{
-	// The depth map
-	glActiveTexture(GL_TEXTURE0);
-	glBindTexture(GL_TEXTURE_2D, depth_map);
-
-	// Near and far variables for calculate depth variable linearly
-	glUniform1f(glGetUniformLocation(debug_depth_program, "near"), _near);
-	glUniform1f(glGetUniformLocation(debug_depth_program, "far"), _far);
-
-	glBindVertexArray(quadVAO);
-	glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-	glBindVertexArray(0);
-}
-
 // Send camera variables to shader
 void draw_camera(GLuint _shader_program)
 {
@@ -554,28 +520,15 @@ void render()
 
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-		if (enable_light_scene)
-		{
-			// Render scene from perspective of the light visualized with depth values (for debug purpose)
-			glViewport(0, 0, WIDTH, HEIGHT);
-			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-			glClearColor(0.1f, 0.1f, 0.1f, 1.f);
+		// Second pass, render scene with using depth_map for shadows
+		glViewport(0, 0, WIDTH, HEIGHT);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glUseProgram(shader_program);
 
-			glUseProgram(debug_depth_program);
-			draw_quad();
-		}
-		else
-		{
-			// Second pass, render scene with using depth_map for shadows
-			glViewport(0, 0, WIDTH, HEIGHT);
-			glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-			glUseProgram(shader_program);
-
-			draw_camera(shader_program);
-			draw_light(shader_program);
-			draw_cubes(shader_program);
-			draw_floor(shader_program);
-		}
+		draw_camera(shader_program);
+		draw_light(shader_program);
+		draw_cubes(shader_program);
+		draw_floor(shader_program);
 	}
 
 	glutSwapBuffers();
