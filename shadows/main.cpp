@@ -533,4 +533,6 @@ void render()
 
 	glutSwapBuffers();
 	GLuint err = glGetError(); if (err) fprintf(stderr, "%s\n", gluErrorString(err));
+
+	glutPostRedisplay(); // For render loop
 }
