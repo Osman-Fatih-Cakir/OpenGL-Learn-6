@@ -9,8 +9,8 @@
 #include <meshes.h>
 #include <shaders.h>
 
-const int WIDTH = 1200;
-const int HEIGHT = 800;
+const int WIDTH = 1280;
+const int HEIGHT = 720;
 const float aspect = WIDTH / HEIGHT;
 
 typedef glm::mat3 mat3;
